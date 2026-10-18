@@ -194,6 +194,38 @@ class PushToTalkTests(unittest.TestCase):
             self.assertTrue(os.path.isabs(path))
 
 
+class IpcTests(unittest.TestCase):
+    def test_already_running_does_not_delete_socket(self):
+        import json
+        import socket
+        import threading
+
+        from voice_type.ipc import AlreadyRunning, ControlServer
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "voice-type.sock"
+            fake = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            fake.bind(str(path))
+            fake.listen(1)
+
+            def serve():
+                conn, _ = fake.accept()
+                conn.recv(1024)
+                conn.sendall(json.dumps({"ok": True}).encode() + b"\n")
+                conn.close()
+
+            thread = threading.Thread(target=serve, daemon=True)
+            thread.start()
+            server = ControlServer(lambda cmd: {"ok": True}, path=path)
+            with self.assertRaises(AlreadyRunning):
+                server.start()
+            # 第二个实例退出时不能删掉第一个实例的套接字
+            server.stop()
+            self.assertTrue(path.exists())
+            thread.join(timeout=2)
+            fake.close()
+
+
 class ControllerTests(unittest.TestCase):
     def test_record_transcribe_inject_flow(self):
         from voice_type import controller as controller_mod

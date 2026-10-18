@@ -275,7 +275,8 @@ $XDG_RUNTIME_DIR/voice-type.sock
 
 - 协议：一行 JSON 请求 → 一行 JSON 响应
 - 支持命令：`toggle`、`start`、`stop`、`status`、`show`、`quit`
-- 单实例：重复启动时，新进程把 `show` 发给已有实例后退出
+- 单实例：使用 GApplication/DBus 的唯一实例模式，重复启动时由已有实例显示窗口，第二个进程直接退出
+- 控制套接字带所有权标记：只有真正 `bind` 成功的实例才会在退出时删除套接字，避免误删其他实例的套接字
 - `voice-type show` 在服务未运行时会拉起可见窗口；`toggle/start/stop` 不会自动拉起服务
 
 ### 录音 → 识别 → 输入 数据流
@@ -589,7 +590,7 @@ uv pip install --python .venv/bin/python -e .
 - 右 Alt 按键解析、短按取消、忙碌忽略、FIFO 事件读取
 - 键盘设备发现
 
-当前共 21 个单元测试。
+当前共 22 个单元测试。
 
 ---
 

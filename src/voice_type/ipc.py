@@ -97,6 +97,9 @@ class ControlServer:
         self.path = path or socket_path()
         self._sock: socket.socket | None = None
         self._watch_id: int | None = None
+        # 只有真正 bind 成功的实例才拥有这个路径，stop() 时才有权删除。
+        # 否则 AlreadyRunning 的第二个实例退出时会误删第一个实例的套接字。
+        self._owns_path = False
 
     def start(self) -> None:
         from gi.repository import GLib
@@ -114,6 +117,7 @@ class ControlServer:
                 raise AlreadyRunning("语音输入服务已在运行")
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.bind(str(self.path))
+        self._owns_path = True
         try:
             os.chmod(self.path, 0o600)
         except OSError:
@@ -154,7 +158,9 @@ class ControlServer:
             except OSError:
                 pass
             self._sock = None
-        try:
-            os.unlink(self.path)
-        except OSError:
-            pass
+        if self._owns_path:
+            try:
+                os.unlink(self.path)
+            except OSError:
+                pass
+            self._owns_path = False

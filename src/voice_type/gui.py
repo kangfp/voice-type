@@ -6,7 +6,10 @@
 
 from __future__ import annotations
 
+import os
 import sys
+import threading
+import time
 from typing import Any
 
 import gi
@@ -41,10 +44,9 @@ STATE_TEXT = {
 
 class VoiceTypeApplication(Adw.Application):
     def __init__(self, start_hidden: bool = False) -> None:
-        super().__init__(
-            application_id=APP_ID,
-            flags=Gio.ApplicationFlags.NON_UNIQUE,
-        )
+        # 使用 GApplication 默认的唯一实例模式：重复启动时由 DBus 激活已有实例，
+        # 第二个进程自动退出，不会出现两个后台进程抢同一个控制套接字。
+        super().__init__(application_id=APP_ID)
         self.start_hidden = start_hidden
         self.cfg = load_config()
         self.controller = Controller(
@@ -76,21 +78,22 @@ class VoiceTypeApplication(Adw.Application):
 
     def _on_activate(self, _app: Adw.Application) -> None:
         if self.server is None:
+            server = ipc.ControlServer(self._handle_command)
             try:
-                self.server = ipc.ControlServer(self._handle_command)
-                self.server.start()
+                server.start()
             except ipc.AlreadyRunning:
-                # 已有实例：让它把窗口显示出来，然后退出本进程
+                # 已有实例：让它把窗口显示出来，然后退出本进程。
+                # 这里直接 os._exit，避免在 activate 阶段调用 quit() 后进程悬挂。
                 try:
                     ipc.send_command("show")
                 except ipc.IpcError:
                     pass
-                self.quit()
-                return
+                os._exit(0)
             except OSError as exc:
                 print(f"无法启动控制套接字：{exc}", file=sys.stderr)
                 self.quit()
                 return
+            self.server = server
 
         if self.window is None:
             self._build_window()
@@ -123,7 +126,7 @@ class VoiceTypeApplication(Adw.Application):
             GLib.idle_add(self._show_window)
             return {"ok": True, "state": self.controller.state, "message": "已显示窗口"}
         if cmd == "quit":
-            GLib.idle_add(self.quit)
+            GLib.idle_add(self._request_quit)
             return {"ok": True, "state": "idle", "message": "已退出"}
         return {"ok": False, "error": f"未知命令：{cmd}"}
 
@@ -437,14 +440,24 @@ class VoiceTypeApplication(Adw.Application):
         dialog.present()
 
     def _on_exit_action(self, _action: Gio.SimpleAction, _param: Any) -> None:
-        self.quit()
+        self._request_quit()
 
     def _on_close_request(self, _window: Adw.ApplicationWindow) -> bool:
         # 关闭窗口 = 退出应用（不再隐藏到后台）
+        self._request_quit()
+        return True
+
+    def _request_quit(self) -> None:
         if self.controller.state == RECORDING:
             self.controller.cancel()
-        self.quit()
-        return True
+        # 延迟到主循环空闲时再 quit，并加一个兜底：2.5 秒后仍未退出就强制结束进程。
+        GLib.idle_add(self.quit)
+        threading.Thread(target=self._force_exit, daemon=True).start()
+
+    @staticmethod
+    def _force_exit() -> None:
+        time.sleep(2.5)
+        os._exit(0)
 
     # ---------- 状态刷新 ----------
 
