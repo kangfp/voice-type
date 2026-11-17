@@ -1,0 +1,4 @@
+#!/bin/sh
+# voice-type 启动包装：复用系统 PyGObject，运行内置 venv
+export PYTHONPATH="/usr/lib/python3/dist-packages${PYTHONPATH:+:$PYTHONPATH}"
+exec /opt/voice-type/venv/bin/python -m voice_type "$@"

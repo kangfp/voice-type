@@ -1,0 +1,2 @@
+# voice-type：允许 input 组写 /dev/uinput（虚拟键盘注入文字所需）
+KERNEL=="uinput", GROUP="input", MODE="0660"

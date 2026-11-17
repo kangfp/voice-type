@@ -1,6 +1,7 @@
 """把识别结果注入当前焦点窗口。
 
-Wayland 下没有 XTest，使用 ydotool 写 /dev/uinput 模拟按键。
+Wayland 下没有 XTest，通过 /dev/uinput 虚拟键盘模拟按键：
+优先用内置的 uinput 实现（无外部依赖），ydotool 作为备用。
 文字先放进剪贴板再按 Ctrl+V —— 中文/标点/emoji 都能可靠输入。
 """
 
@@ -106,17 +107,27 @@ def inject_text(
         return
     shortcut = validate_shortcut(paste_shortcut)
 
-    # 先写剪贴板：即使 ydotool 不可用，用户也能手动粘贴，不会丢字。
+    # 先写剪贴板：即使按键注入不可用，用户也能手动粘贴，不会丢字。
     previous = _read_clipboard_text() if restore_clipboard else None
     _copy(text)
+    # 给剪贴板管理器一点时间拿到 selection，再发按键
+    time.sleep(0.15)
     try:
-        ydotool = _require("ydotool")
-        # 给剪贴板管理器一点时间拿到 selection，再发按键。
-        # 保留 ydotool 默认的 100ms 前置延迟：直连 uinput 时虚拟键盘需要
-        # 时间注册，--delay 0 会让第一次按键被合成器丢掉。
-        time.sleep(0.15)
-        _run([ydotool, "key", shortcut])
+        _press_paste(shortcut)
     except InjectError as exc:
         raise InjectError(str(exc), copied=True) from exc
     if restore_clipboard and previous is not None:
         _restore_later(previous)
+
+
+def _press_paste(shortcut: str) -> None:
+    from . import uinput
+
+    if uinput.available():
+        try:
+            uinput.send_shortcut(shortcut)
+            return
+        except uinput.UinputError:
+            pass  # 落到 ydotool 备用路径
+    ydotool = _require("ydotool")
+    _run([ydotool, "key", shortcut])

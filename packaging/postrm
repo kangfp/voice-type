@@ -1,0 +1,18 @@
+#!/bin/sh
+# 卸载后清理
+set -e
+
+case "$1" in
+    remove|purge)
+        rm -rf /opt/voice-type
+        gtk-update-icon-cache -f -t /usr/share/icons/hicolor >/dev/null 2>&1 || true
+        update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+        udevadm control --reload-rules || true
+        ;;
+esac
+
+if [ "$1" = "purge" ]; then
+    echo "注意：用户配置 ~/.config/voice-type 与已下载模型缓存未删除，如需清理请手动执行。"
+fi
+
+exit 0

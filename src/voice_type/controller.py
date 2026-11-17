@@ -128,11 +128,12 @@ class Controller:
             return
         model = str(self.cfg.get("local_model") or "large-v3-turbo")
         compute = str(self.cfg.get("compute_type") or "int8")
+        source = str(self.cfg.get("model_source") or "hf-mirror")
 
         def worker() -> None:
             notify("开始加载本地模型", f"{model}（首次使用会自动下载）")
             try:
-                transcribe.preload_local(model, compute)
+                transcribe.preload_local(model, compute, source)
             except transcribe.TranscribeError as exc:
                 notify("模型加载失败", str(exc), urgency="critical")
                 return

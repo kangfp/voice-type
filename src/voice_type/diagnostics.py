@@ -20,17 +20,12 @@ class Check:
     critical: bool = True
 
 
-def _model_cache_dir(model: str) -> Path:
-    home = os.environ.get("HF_HOME")
-    root = Path(home) / "hub" if home else Path.home() / ".cache" / "huggingface" / "hub"
-    repo = f"Systran/faster-whisper-{model}"
-    try:
-        from faster_whisper.utils import _MODELS
+def _model_cache_dir(model: str, source: str = "hf-mirror") -> Path:
+    from . import models
 
-        repo = _MODELS.get(model, repo)
-    except Exception:  # noqa: BLE001 - faster-whisper 未安装时退回默认命名
-        pass
-    return root / ("models--" + repo.replace("/", "--"))
+    if source == models.SOURCE_MS:
+        return models.ms_model_dir(model)
+    return models.hf_model_dir(model)
 
 
 def run_checks() -> list[Check]:
@@ -62,7 +57,6 @@ def run_checks() -> list[Check]:
         ("wl-copy", "wl-clipboard"),
         ("wl-paste", "wl-clipboard"),
         ("notify-send", "libnotify-bin"),
-        ("ydotool", "ydotool"),
     ]:
         path = shutil.which(tool)
         checks.append(
@@ -73,6 +67,17 @@ def run_checks() -> list[Check]:
                 f"sudo apt install {package}",
             )
         )
+    # ydotool 只是备用注入方式（主路径是内置 uinput），缺失不算严重问题
+    ydotool_path = shutil.which("ydotool")
+    checks.append(
+        Check(
+            "命令 ydotool（备用）",
+            bool(ydotool_path),
+            ydotool_path or "未安装（不影响内置 uinput 注入）",
+            "sudo apt install ydotool",
+            critical=False,
+        )
+    )
 
     # /dev/uinput 权限（ydotool 直接注入必需）
     uinput = Path("/dev/uinput")
@@ -148,14 +153,20 @@ def run_checks() -> list[Check]:
             )
         )
     else:
+        from . import models
+
         model = str(cfg.get("local_model") or "large-v3-turbo")
-        cache = _model_cache_dir(model)
-        cached = cache.exists()
+        source = str(cfg.get("model_source") or "hf-mirror")
+        cached = models.is_cached(model, source)
         checks.append(
             Check(
                 "本地模型缓存",
                 cached,
-                f"{model} 已缓存" if cached else f"{model} 未缓存（首次识别会下载）",
+                (
+                    f"{model} 已缓存（来源：{models.SOURCE_LABELS.get(source, source)}）"
+                    if cached
+                    else f"{model} 未缓存（首次识别会下载）"
+                ),
                 "voice-type download-model",
                 critical=False,
             )

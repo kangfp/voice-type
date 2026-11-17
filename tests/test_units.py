@@ -194,6 +194,124 @@ class PushToTalkTests(unittest.TestCase):
             self.assertTrue(os.path.isabs(path))
 
 
+class UinputTests(unittest.TestCase):
+    def test_shortcut_mapping(self):
+        from voice_type import uinput
+
+        self.assertEqual(uinput._SHORTCUT_KEYS["ctrl+v"], (uinput.KEY_LEFTCTRL, uinput.KEY_V))
+        self.assertEqual(
+            uinput._SHORTCUT_KEYS["ctrl+shift+v"],
+            (uinput.KEY_LEFTCTRL, uinput.KEY_LEFTSHIFT, uinput.KEY_V),
+        )
+
+    def test_invalid_shortcut_rejected(self):
+        from voice_type import uinput
+
+        with self.assertRaises(uinput.UinputError):
+            uinput.send_shortcut("alt+f4")
+
+    def test_event_struct_size(self):
+        from voice_type import uinput
+
+        # x86_64 上 input_event 是 24 字节，与 evdev 读取端一致
+        self.assertEqual(uinput._EVENT.size, 24)
+
+
+class ModelSourceTests(unittest.TestCase):
+    def test_repo_mapping(self):
+        from voice_type import models
+
+        self.assertEqual(
+            models.repo_for("large-v3-turbo", models.SOURCE_MS),
+            "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
+        )
+        self.assertEqual(
+            models.repo_for("medium", models.SOURCE_MS),
+            "pengzhendong/faster-whisper-medium",
+        )
+        # HF 两个源用同一仓库名
+        self.assertEqual(
+            models.repo_for("medium", models.SOURCE_HF),
+            models.repo_for("medium", models.SOURCE_MIRROR),
+        )
+        for model in models.MODEL_IDS:
+            self.assertTrue(models.repo_for(model, models.SOURCE_MS))
+
+    def test_endpoints(self):
+        from voice_type import models
+
+        self.assertEqual(models.endpoint_for(models.SOURCE_HF), "https://huggingface.co")
+        self.assertEqual(models.endpoint_for(models.SOURCE_MIRROR), "https://hf-mirror.com")
+        self.assertEqual(models.endpoint_for(models.SOURCE_MS), "https://modelscope.cn")
+
+    def test_apply_endpoint(self):
+        from voice_type import models
+
+        old = os.environ.get("HF_ENDPOINT")
+        try:
+            models.apply_endpoint(models.SOURCE_HF)
+            self.assertEqual(os.environ["HF_ENDPOINT"], "https://huggingface.co")
+            models.apply_endpoint(models.SOURCE_MIRROR)
+            self.assertEqual(os.environ["HF_ENDPOINT"], "https://hf-mirror.com")
+        finally:
+            if old is None:
+                os.environ.pop("HF_ENDPOINT", None)
+            else:
+                os.environ["HF_ENDPOINT"] = old
+
+    def test_cache_detection_both_sources(self):
+        from voice_type import models
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            old_hf = os.environ.get("HF_HOME")
+            old_ms = os.environ.get("MODELSCOPE_CACHE")
+            os.environ["HF_HOME"] = str(root / "hf")
+            os.environ["MODELSCOPE_CACHE"] = str(root / "ms")
+            try:
+                self.assertFalse(models.is_cached("medium", models.SOURCE_MIRROR))
+                self.assertFalse(models.is_cached("medium", models.SOURCE_MS))
+                # 伪造 HF 快照
+                snap = models.hf_model_dir("medium") / "snapshots" / "abc123"
+                snap.mkdir(parents=True)
+                (snap / "model.bin").write_bytes(b"x")
+                self.assertTrue(models.is_cached("medium", models.SOURCE_MIRROR))
+                self.assertEqual(models.cached_model_dir("medium", models.SOURCE_MIRROR), snap)
+                # 伪造魔搭新版缓存：hub/models/<owner>--<name>/snapshots/master/
+                ms_snap = models.ms_model_dir("medium") / "snapshots" / "master"
+                ms_snap.mkdir(parents=True)
+                (ms_snap / "model.bin").write_bytes(b"x")
+                self.assertTrue(models.is_cached("medium", models.SOURCE_MS))
+                # resolve_model 命中缓存时不触发下载
+                self.assertEqual(
+                    models.resolve_model("medium", models.SOURCE_MS), str(ms_snap)
+                )
+                # 旧版布局 hub/<owner>/<name>/ 也要能识别
+                (ms_snap / "model.bin").unlink()
+                legacy = root / "ms" / "hub" / "pengzhendong" / "faster-whisper-medium"
+                legacy.mkdir(parents=True)
+                (legacy / "model.bin").write_bytes(b"x")
+                self.assertTrue(models.is_cached("medium", models.SOURCE_MS))
+            finally:
+                for key, val in (("HF_HOME", old_hf), ("MODELSCOPE_CACHE", old_ms)):
+                    if val is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = val
+
+    def test_unknown_model_rejected(self):
+        from voice_type import models
+
+        with self.assertRaises(models.ModelError):
+            models.download_model("no-such-model", models.SOURCE_MIRROR)
+        with self.assertRaises(models.ModelError):
+            models.download_model("tiny", "no-such-source")
+
+    def test_config_has_source_keys(self):
+        self.assertEqual(DEFAULTS["model_source"], "hf-mirror")
+        self.assertFalse(DEFAULTS["setup_completed"])
+
+
 class IpcTests(unittest.TestCase):
     def test_already_running_does_not_delete_socket(self):
         import json

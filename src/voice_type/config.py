@@ -18,6 +18,10 @@ DEFAULTS: dict[str, Any] = {
     "backend": "local",
     # faster-whisper 模型：tiny / base / small / medium / large-v3-turbo / large-v3
     "local_model": "large-v3-turbo",
+    # 模型下载来源：huggingface / hf-mirror / modelscope（首次启动向导里选择）
+    "model_source": "hf-mirror",
+    # 首次启动向导是否已完成
+    "setup_completed": False,
     "compute_type": "int8",
     "beam_size": 5,
     # 自动去掉前后静音，避免 Whisper 在静音/噪声上凭空生成文字

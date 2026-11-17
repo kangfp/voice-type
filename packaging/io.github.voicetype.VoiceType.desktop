@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=语音输入
+Name[en]=Voice Type
+Comment=按快捷键说话，文字自动输入当前应用
+Comment[en]=Speak with a hotkey; text is typed into the focused app
+Exec=/usr/bin/voice-type gui
+Icon=voice-type
+Terminal=false
+Categories=Utility;Accessibility;
+StartupWMClass=io.github.voicetype.VoiceType
+Keywords=voice;dictation;whisper;speech;语音;听写;

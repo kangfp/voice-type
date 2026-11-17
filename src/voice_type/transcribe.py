@@ -9,10 +9,7 @@ import wave
 from pathlib import Path
 from typing import Any, Callable
 
-# 国内网络访问 HuggingFace 经常超时；默认走镜像，用户可用 HF_ENDPOINT 覆盖。
-os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
-# hf-mirror 不支持 Xet 传输，禁用后走普通 HTTP 下载
-os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+from . import models
 
 StatusCallback = Callable[[str], None]
 
@@ -63,7 +60,13 @@ def _local_prompt(language: str, configured: str) -> str | None:
     return base or None
 
 
-def _load_local(model_size: str, compute_type: str) -> Any:
+def _load_local(
+    model_size: str,
+    compute_type: str,
+    source: str = "hf-mirror",
+    status: StatusCallback | None = None,
+    progress: models.ProgressCallback | None = None,
+) -> Any:
     global _MODEL, _MODEL_KEY
     key = (model_size, compute_type)
     with _MODEL_LOCK:
@@ -78,21 +81,31 @@ def _load_local(model_size: str, compute_type: str) -> Any:
         _MODEL = None
         _MODEL_KEY = None
         try:
+            # 统一解析成本地目录：已缓存直接用，未缓存按所选来源下载
+            model_path = models.resolve_model(model_size, source, status=status, progress=progress)
             _MODEL = WhisperModel(
-                model_size,
+                model_path,
                 device="cpu",
                 compute_type=compute_type,
                 cpu_threads=os.cpu_count() or 4,
             )
+        except models.ModelError as exc:
+            raise TranscribeError(str(exc)) from exc
         except Exception as exc:  # noqa: BLE001 - 网络/模型/内存错误统一提示
             raise TranscribeError(f"加载本地模型 {model_size} 失败：{exc}") from exc
         _MODEL_KEY = key
         return _MODEL
 
 
-def preload_local(model_size: str, compute_type: str = "int8") -> None:
+def preload_local(
+    model_size: str,
+    compute_type: str = "int8",
+    source: str = "hf-mirror",
+    status: StatusCallback | None = None,
+    progress: models.ProgressCallback | None = None,
+) -> None:
     """提前下载并加载模型（GUI 的「预下载模型」按钮用）。"""
-    _load_local(model_size, compute_type)
+    _load_local(model_size, compute_type, source, status, progress)
 
 
 def _read_wav_float32(path: str) -> Any:
@@ -118,9 +131,10 @@ def transcribe_local(
 ) -> str:
     model_size = str(cfg.get("local_model") or "large-v3-turbo")
     compute_type = str(cfg.get("compute_type") or "int8")
+    source = str(cfg.get("model_source") or "hf-mirror")
     if status:
-        status(f"正在加载模型 {model_size}（首次使用会从 hf-mirror 下载）…")
-    model = _load_local(model_size, compute_type)
+        status(f"正在加载模型 {model_size}…")
+    model = _load_local(model_size, compute_type, source, status)
     language = str(cfg.get("language") or "zh")
     lang = None if language in ("", "auto") else language
     if status:

@@ -150,17 +150,25 @@ def _cmd_doctor(_: argparse.Namespace) -> int:
 
 
 def _cmd_download_model(args: argparse.Namespace) -> int:
-    from . import transcribe
+    from . import models, transcribe
 
     cfg = load_config()
     model = args.model or str(cfg.get("local_model") or "large-v3-turbo")
     compute = args.compute_type or str(cfg.get("compute_type") or "int8")
-    print(f"正在准备本地模型 {model}（compute_type={compute}）…")
-    print("首次使用会从 https://hf-mirror.com 下载，请耐心等待。")
+    source = args.source or str(cfg.get("model_source") or "hf-mirror")
+    print(f"正在准备本地模型 {model}（来源：{models.SOURCE_LABELS.get(source, source)}）…")
+
+    def show_progress(frac: float, desc: str) -> None:
+        print(f"\r  {frac * 100:5.1f}% {desc[:60]}", end="", flush=True)
+
     try:
-        transcribe.preload_local(model, compute)
+        transcribe.preload_local(
+            model, compute, source, status=lambda s: print(s), progress=show_progress
+        )
+        if sys.stdout.isatty():
+            print()
     except transcribe.TranscribeError as exc:
-        print(f"✗ {exc}", file=sys.stderr)
+        print(f"\n✗ {exc}", file=sys.stderr)
         return 1
     print("✓ 模型已就绪")
     return 0
@@ -205,6 +213,7 @@ def build_parser() -> argparse.ArgumentParser:
     download = sub.add_parser("download-model", help="预先下载/加载本地模型")
     download.add_argument("--model", help="tiny/base/small/medium/large-v3-turbo/large-v3")
     download.add_argument("--compute-type", help="int8/float32 等")
+    download.add_argument("--source", choices=["huggingface", "hf-mirror", "modelscope"], help="模型下载来源（默认读配置）")
 
     sub.add_parser("config", help="打印配置文件和当前配置")
     return parser

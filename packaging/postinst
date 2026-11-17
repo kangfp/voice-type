@@ -1,0 +1,22 @@
+#!/bin/sh
+# voice-type 安装后脚本（以 root 运行）
+set -e
+
+case "$1" in
+    configure)
+        # 让 uinput 规则立即生效（input 组可写 /dev/uinput）
+        udevadm control --reload-rules || true
+        udevadm trigger --name-match=uinput || true
+
+        # 刷新图标缓存与桌面数据库
+        gtk-update-icon-cache -f -t /usr/share/icons/hicolor >/dev/null 2>&1 || true
+        update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+
+        echo "voice-type 已安装。"
+        echo "  • 从应用菜单打开「语音输入」，首次启动会进入设置向导"
+        echo "  • 向导里选择模型下载来源（国外 Hugging Face / 国内魔搭）并下载模型"
+        echo "  • 右 Alt 按住说话需要 input 组权限，向导会引导修复（修复后需注销重登）"
+        ;;
+esac
+
+exit 0

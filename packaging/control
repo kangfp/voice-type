@@ -1,0 +1,14 @@
+Package: voice-type
+Version: 0.2.0
+Section: utils
+Priority: optional
+Architecture: amd64
+Depends: python3 (>= 3.12), python3-gi, gir1.2-gtk-4.0, gir1.2-adw-1, libgtk-4-1, wl-clipboard, libnotify-bin, pipewire-bin, pkexec
+Recommends: ydotool
+Maintainer: Kang Feipeng <269406200+kangfp@users.noreply.github.com>
+Description: Voice dictation for Ubuntu GNOME Wayland
+ Hold right Alt and speak; recognized text is typed into the focused app.
+ Local recognition uses faster-whisper (models downloaded from Hugging Face,
+ hf-mirror or ModelScope, chosen in a first-run wizard); an OpenAI-compatible
+ online API can be used instead. Includes a GTK4/libadwaita control window
+ with settings, hotkey registration and environment diagnostics.

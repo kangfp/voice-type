@@ -1,7 +1,7 @@
 """GTK4 / libadwaita 控制窗口。
 
 设计取舍：GNOME 46 默认没有系统托盘，因此不做托盘图标；
-窗口关闭时只是隐藏，后台服务继续监听快捷键。
+关闭窗口即退出应用。首次启动（setup_completed=False）先走设置向导。
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ gi.require_version("Adw", "1")
 
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
 
-from . import hotkey, ipc, ptt  # noqa: E402
+from . import hotkey, ipc, models, ptt, wizard  # noqa: E402
 from .config import config_path, load_config, save_config  # noqa: E402
 from .controller import (  # noqa: E402
     IDLE,
@@ -32,7 +32,7 @@ from .diagnostics import format_checks, run_checks  # noqa: E402
 from .notify import notify  # noqa: E402
 
 APP_ID = "io.github.voicetype.VoiceType"
-LOCAL_MODELS = ["tiny", "base", "small", "medium", "large-v3-turbo", "large-v3"]
+LOCAL_MODELS = models.MODEL_IDS
 PASTE_SHORTCUTS = [("ctrl+v", "Ctrl+V（大多数应用）"), ("ctrl+shift+v", "Ctrl+Shift+V（终端）")]
 
 STATE_TEXT = {
@@ -70,6 +70,7 @@ class VoiceTypeApplication(Adw.Application):
         for name, callback in [
             ("copy-last", self._on_copy_action),
             ("doctor", self._on_doctor_action),
+            ("rewizard", self._on_rewizard_action),
             ("exit", self._on_exit_action),
         ]:
             action = Gio.SimpleAction.new(name, None)
@@ -101,7 +102,9 @@ class VoiceTypeApplication(Adw.Application):
         if not self.start_hidden and self.window is not None:
             self._show_window()
         self.start_hidden = False
-        self._sync_ptt()
+        # 向导未完成时不启动右 Alt 监听，避免用户还没选模型就开始录音
+        if self.cfg.get("setup_completed"):
+            self._sync_ptt()
 
     def _on_shutdown(self, _app: Adw.Application) -> None:
         if self.ptt_listener is not None:
@@ -143,25 +146,52 @@ class VoiceTypeApplication(Adw.Application):
         menu = Gio.Menu()
         menu.append("复制最近结果", "app.copy-last")
         menu.append("环境自检", "app.doctor")
+        menu.append("重新运行设置向导", "app.rewizard")
         menu.append("退出", "app.exit")
         menu_button.set_menu_model(menu)
         header.pack_end(menu_button)
 
         self.toast_overlay = Adw.ToastOverlay()
-        page = Adw.PreferencesPage()
-        self.toast_overlay.set_child(page)
-
         toolbar_view = Adw.ToolbarView()
         toolbar_view.add_top_bar(header)
         toolbar_view.set_content(self.toast_overlay)
         self.window.set_content(toolbar_view)
 
+        if self.cfg.get("setup_completed"):
+            self._show_main_page()
+        else:
+            self._show_wizard()
+
+    def _show_main_page(self) -> None:
+        assert self.toast_overlay is not None
+        page = Adw.PreferencesPage()
         page.add(self._build_status_group())
         page.add(self._build_result_group())
         page.add(self._build_settings_group())
         page.add(self._build_hotkey_group())
+        self.toast_overlay.set_child(page)
         self._ready = True
         self._update_state(self.controller.state)
+
+    def _show_wizard(self) -> None:
+        assert self.toast_overlay is not None
+        self._ready = False
+        wiz = wizard.SetupWizard(self.cfg, self._on_wizard_finished)
+        self.toast_overlay.set_child(wiz.build())
+
+    def _on_wizard_finished(self, updates: dict[str, Any]) -> None:
+        cfg = dict(self.cfg)
+        cfg.update(updates)
+        try:
+            save_config(cfg)
+        except OSError as exc:
+            self._toast(f"保存失败：{exc}")
+            return
+        self.cfg = cfg
+        self.controller.update_config(cfg)
+        self._show_main_page()
+        self._sync_ptt()
+        self._toast("设置完成，可以开始使用了")
 
     def _build_status_group(self) -> Adw.PreferencesGroup:
         assert self.window is not None
@@ -241,6 +271,17 @@ class VoiceTypeApplication(Adw.Application):
             LOCAL_MODELS.index(model) if model in LOCAL_MODELS else LOCAL_MODELS.index("large-v3-turbo")
         )
         group.add(self.local_model_row)
+
+        self.model_source_row = Adw.ComboRow(
+            title="模型下载来源",
+            subtitle="国外选 Hugging Face；国内选魔搭或 hf-mirror 镜像",
+            model=Gtk.StringList.new([label for _, label, _ in models.SOURCES]),
+        )
+        source = str(cfg.get("model_source") or models.SOURCE_MIRROR)
+        self.model_source_row.set_selected(
+            models.SOURCE_IDS.index(source) if source in models.SOURCE_IDS else 1
+        )
+        group.add(self.model_source_row)
 
         self.language_row = Adw.EntryRow(title="语言（zh / en / auto）")
         self.language_row.set_text(str(cfg.get("language") or "zh"))
@@ -354,6 +395,7 @@ class VoiceTypeApplication(Adw.Application):
         old_ptt = bool(self.cfg.get("push_to_talk", True))
         cfg["backend"] = "local" if self.backend_row.get_selected() == 0 else "online"
         cfg["local_model"] = LOCAL_MODELS[self.local_model_row.get_selected()]
+        cfg["model_source"] = models.SOURCE_IDS[self.model_source_row.get_selected()]
         cfg["language"] = self.language_row.get_text().strip() or "zh"
         cfg["initial_prompt"] = self.prompt_row.get_text().strip()
         cfg["source"] = self.source_row.get_text().strip()
@@ -438,6 +480,17 @@ class VoiceTypeApplication(Adw.Application):
         dialog.add_response("close", "关闭")
         dialog.set_default_response("close")
         dialog.present()
+
+    def _on_rewizard_action(self, _action: Gio.SimpleAction, _param: Any) -> None:
+        cfg = dict(self.cfg)
+        cfg["setup_completed"] = False
+        try:
+            save_config(cfg)
+        except OSError as exc:
+            self._toast(f"保存失败：{exc}")
+            return
+        self.cfg = cfg
+        self._show_wizard()
 
     def _on_exit_action(self, _action: Gio.SimpleAction, _param: Any) -> None:
         self._request_quit()

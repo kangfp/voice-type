@@ -1,0 +1,11 @@
+#!/bin/sh
+# 卸载/升级前：停掉正在运行的实例
+set -e
+
+case "$1" in
+    remove|upgrade|deconfigure)
+        pkill -f "voice_type gui" >/dev/null 2>&1 || true
+        ;;
+esac
+
+exit 0
