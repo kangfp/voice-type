@@ -98,6 +98,21 @@ def _restore_later(previous: str, delay: float = 1.2) -> None:
     threading.Thread(target=worker, daemon=False).start()
 
 
+def read_clipboard_text() -> str | None:
+    """读取当前剪贴板文本（流式注入开始前捕获一次用）。"""
+    return _read_clipboard_text()
+
+
+def copy_to_clipboard(text: str) -> None:
+    """只写剪贴板，不模拟按键。"""
+    _copy(text)
+
+
+def schedule_clipboard_restore(previous: str, delay: float = 1.2) -> None:
+    """延迟恢复剪贴板（流式注入全部结束后调用一次）。"""
+    _restore_later(previous, delay)
+
+
 def inject_text(
     text: str,
     paste_shortcut: str = "ctrl+v",

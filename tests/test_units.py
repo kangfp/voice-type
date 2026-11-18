@@ -384,6 +384,51 @@ class ControllerTests(unittest.TestCase):
             self.assertEqual(controller.state, "idle")
             self.assertEqual(controller.last_text, "你好，世界。")
 
+    def test_streaming_injects_per_segment(self):
+        from voice_type import controller as controller_mod
+        from voice_type.controller import Controller
+
+        results = []
+
+        class FakeRecorder:
+            def __init__(self, source=""):
+                pass
+
+            def start(self):
+                pass
+
+            def stop(self):
+                return "/tmp/fake.wav"
+
+        def fake_transcribe(path, cfg, status=None, on_segment=None):
+            on_segment("你好，")
+            on_segment("世界。")
+            return "你好，世界。"
+
+        with mock.patch.object(controller_mod, "Recorder", FakeRecorder), mock.patch.object(
+            controller_mod.transcribe, "transcribe", side_effect=fake_transcribe
+        ), mock.patch.object(controller_mod, "inject_text") as fake_inject, mock.patch.object(
+            controller_mod, "read_clipboard_text", return_value="原剪贴板"
+        ) as fake_read, mock.patch.object(
+            controller_mod, "schedule_clipboard_restore"
+        ) as fake_restore, mock.patch.object(controller_mod, "notify"):
+            controller = Controller(dict(DEFAULTS), on_result=results.append)
+            controller.start()
+            controller.stop()
+            deadline = time.time() + 5
+            while controller.state != "idle" and time.time() < deadline:
+                time.sleep(0.02)
+            # 每段各注入一次，且都不单独恢复剪贴板
+            self.assertEqual(fake_inject.call_count, 2)
+            for call in fake_inject.call_args_list:
+                self.assertFalse(call.kwargs.get("restore_clipboard", True))
+            # 剪贴板只捕获一次、结束后统一恢复一次
+            fake_read.assert_called_once()
+            fake_restore.assert_called_once_with("原剪贴板")
+            # 结果逐步刷新
+            self.assertEqual(results, ["你好，", "你好，世界。", "你好，世界。"])
+            self.assertEqual(controller.last_text, "你好，世界。")
+
     def test_inject_failure_keeps_text(self):
         from voice_type import controller as controller_mod
         from voice_type.controller import Controller

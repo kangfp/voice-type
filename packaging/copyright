@@ -6,6 +6,13 @@ Files: *
 Copyright: 2026 Kang Feipeng
 License: MIT
 
+Files: opt/voice-type/bin/wl-copy opt/voice-type/bin/wl-paste
+Copyright: 2017-2024 Bugaevc
+License: GPL-3+
+Comment: Bundled unmodified binaries from the Ubuntu wl-clipboard package.
+ Full license text in /usr/share/doc/voice-type/wl-clipboard.copyright;
+ corresponding source available from Ubuntu archives (apt-get source wl-clipboard).
+
 License: MIT
  Permission is hereby granted, free of charge, to any person obtaining a
  copy of this software and associated documentation files (the "Software"),

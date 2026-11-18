@@ -9,7 +9,13 @@ from typing import Any, Callable
 
 from . import transcribe
 from .audio import AudioError, Recorder
-from .inject import InjectError, inject_text
+from .inject import (
+    InjectError,
+    copy_to_clipboard,
+    inject_text,
+    read_clipboard_text,
+    schedule_clipboard_restore,
+)
 from .notify import notify
 
 IDLE = "idle"
@@ -163,28 +169,72 @@ class Controller:
             if recorder is None:
                 raise AudioError("录音器丢失")
             path = recorder.stop()
-            text = transcribe.transcribe(path, cfg, status=self.on_status)
+            paste_shortcut = str(cfg.get("paste_shortcut") or "ctrl+v")
+            restore = bool(cfg.get("restore_clipboard", True))
+            # 流式注入：开始前捕获一次剪贴板，全部结束后才恢复
+            previous = read_clipboard_text() if restore else None
+            streamed: list[str] = []
+            inject_failed = False
+
+            def handle_piece(piece: str) -> None:
+                nonlocal inject_failed
+                streamed.append(piece)
+                partial = "".join(streamed).strip()
+                self.last_text = partial
+                if self.on_result:
+                    self.on_result(partial)
+                if inject_failed:
+                    return
+                try:
+                    inject_text(piece, paste_shortcut=paste_shortcut, restore_clipboard=False)
+                except InjectError as exc:
+                    inject_failed = True
+                    notify(
+                        "自动输入失败，文字已复制",
+                        "请手动按 Ctrl+V 粘贴。详情：" + str(exc),
+                        urgency="critical",
+                    )
+
+            text = transcribe.transcribe(
+                path, cfg, status=self.on_status, on_segment=handle_piece
+            )
             if text.strip():
                 self.last_text = text
                 if self.on_result:
                     self.on_result(text)
-                try:
-                    inject_text(
-                        text,
-                        paste_shortcut=str(cfg.get("paste_shortcut") or "ctrl+v"),
-                        restore_clipboard=bool(cfg.get("restore_clipboard", True)),
-                    )
-                except InjectError as exc:
-                    if exc.copied:
-                        notify(
-                            "自动输入失败，文字已复制",
-                            "请手动按 Ctrl+V 粘贴。详情：" + str(exc),
-                            urgency="critical",
+                if not streamed:
+                    # 回调未触发时的兜底：一次性注入
+                    try:
+                        inject_text(
+                            text, paste_shortcut=paste_shortcut, restore_clipboard=restore
                         )
+                    except InjectError as exc:
+                        inject_failed = True
+                        if exc.copied:
+                            notify(
+                                "自动输入失败，文字已复制",
+                                "请手动按 Ctrl+V 粘贴。详情：" + str(exc),
+                                urgency="critical",
+                            )
+                        else:
+                            notify("自动输入失败", str(exc), urgency="critical")
                     else:
-                        notify("自动输入失败", str(exc), urgency="critical")
+                        notify("已输入", text[:80])
+                elif inject_failed:
+                    # 部分片段注入失败：把完整文字放进剪贴板供手动粘贴，不再恢复原剪贴板
+                    try:
+                        copy_to_clipboard(text)
+                    except InjectError:
+                        pass
+                    notify(
+                        "自动输入中断",
+                        "完整文字已复制，请手动按 Ctrl+V 粘贴",
+                        urgency="critical",
+                    )
                 else:
                     notify("已输入", text[:80])
+                if restore and previous is not None and streamed and not inject_failed:
+                    schedule_clipboard_restore(previous)
             else:
                 notify("没有识别到内容", "请靠近麦克风再说一次")
         except (AudioError, transcribe.TranscribeError) as exc:

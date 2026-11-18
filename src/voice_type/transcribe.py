@@ -128,6 +128,7 @@ def transcribe_local(
     path: str,
     cfg: dict[str, Any],
     status: StatusCallback | None = None,
+    on_segment: Callable[[str], None] | None = None,
 ) -> str:
     model_size = str(cfg.get("local_model") or "large-v3-turbo")
     compute_type = str(cfg.get("compute_type") or "int8")
@@ -149,12 +150,22 @@ def transcribe_local(
             condition_on_previous_text=False,
             initial_prompt=_local_prompt(language, str(cfg.get("initial_prompt") or "")),
         )
-        text = "".join(seg.text for seg in segments).strip()
+        detected = getattr(info, "language", None) if info is not None else None
+        zh_mode = language == "zh" or detected == "zh"
+        chunks: list[str] = []
+        # 逐段流式输出：每解码完一段就回调一次，而不是等全部结束
+        for seg in segments:
+            piece = seg.text
+            if zh_mode:
+                piece = normalize_chinese(piece).strip()
+            if not piece.strip():
+                continue
+            chunks.append(piece)
+            if on_segment:
+                on_segment(piece)
+        text = "".join(chunks).strip()
     except Exception as exc:  # noqa: BLE001
         raise TranscribeError(f"本地识别失败：{exc}") from exc
-    detected = getattr(info, "language", None) if info is not None else None
-    if language == "zh" or detected == "zh":
-        text = normalize_chinese(text)
     return text
 
 
@@ -162,6 +173,7 @@ def transcribe_online(
     path: str,
     cfg: dict[str, Any],
     status: StatusCallback | None = None,
+    on_segment: Callable[[str], None] | None = None,
 ) -> str:
     import httpx
 
@@ -204,6 +216,8 @@ def transcribe_online(
         result = resp.text.strip()
     if language == "zh":
         result = normalize_chinese(result)
+    if result and on_segment:
+        on_segment(result)
     return result
 
 
@@ -211,8 +225,9 @@ def transcribe(
     path: str,
     cfg: dict[str, Any],
     status: StatusCallback | None = None,
+    on_segment: Callable[[str], None] | None = None,
 ) -> str:
     backend = str(cfg.get("backend") or "local")
     if backend == "online":
-        return transcribe_online(path, cfg, status)
-    return transcribe_local(path, cfg, status)
+        return transcribe_online(path, cfg, status, on_segment)
+    return transcribe_local(path, cfg, status, on_segment)

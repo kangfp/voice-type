@@ -11,7 +11,7 @@
 
 程序不会开机自启动、没有系统托盘；需要时从应用菜单打开，关闭窗口即退出。
 
-> 当前版本：**v0.2.0** · [下载 deb 安装包](https://github.com/kangfp/voice-type/releases/latest)
+> 当前版本：**v0.3.0** · [下载 deb 安装包](https://github.com/kangfp/voice-type/releases/latest)
 
 ---
 
@@ -40,7 +40,8 @@
 
 ## 功能特性
 
-- **deb 安装包**：内置 Python 运行环境与全部依赖，`dpkg -i` 离线安装，无需 uv/pip/联网装依赖
+- **deb 安装包**：内置 Python 运行环境、全部依赖和 wl-copy/wl-paste 剪贴板工具，一条命令安装，无需二次补装
+- **流式输出**：识别边进行边输入，文字按段落到光标处，不用等整句识别完
 - **首次启动向导**：环境检查（含一键修复权限）→ 模型来源选择 → 模型下载 → 快捷键注册
 - **三个模型下载源**：Hugging Face / hf-mirror 镜像 / 魔搭 ModelScope，自动探测网络并推荐可达的源
 - **右 Alt 按住说话**：按下右 Alt 开始录音，松开自动停止、识别并输入
@@ -66,7 +67,7 @@
 | 系统 | Ubuntu 24.04 amd64（GNOME 46，Wayland；X11 理论上也可用） |
 | 音频 | PipeWire（`pw-record` 可用，Ubuntu 24.04 默认满足） |
 | 用户组 | 当前用户在 `input` 组（读取键盘事件、写 `/dev/uinput` 都需要；向导会引导修复） |
-| 系统工具 | `wl-clipboard`、`libnotify-bin`、`pipewire-bin`（deb 依赖自动安装） |
+| 系统工具 | `libnotify-bin`、`pipewire-bin`（deb 依赖自动安装）；wl-copy/wl-paste 已内置 |
 | GTK | `gir1.2-gtk-4.0`、`gir1.2-adw-1`、`python3-gi`（deb 依赖自动安装） |
 
 - **deb 安装**：Python 运行环境和 faster-whisper 等依赖已内置在安装包里，不需要预装 Python 库或 uv
@@ -81,16 +82,18 @@
 
 ### 方式一：deb 安装包（推荐）
 
-从 [Releases 页面](https://github.com/kangfp/voice-type/releases/latest) 下载 `voice-type_0.2.0_amd64.deb`（约 99MB），然后：
+从 [Releases 页面](https://github.com/kangfp/voice-type/releases/latest) 下载 `voice-type_0.3.0_amd64.deb`（约 99MB），然后**一条命令**安装（apt 会自动解决系统依赖）：
 
 ```bash
-sudo dpkg -i voice-type_0.2.0_amd64.deb
-sudo apt-get install -f -y   # 自动补齐系统依赖
+sudo apt install ./voice-type_0.3.0_amd64.deb
 ```
+
+> 也可以用 `sudo dpkg -i`，但缺依赖时需要再跑 `sudo apt-get install -f -y`；推荐直接用上面的 apt 命令。
 
 安装包内容：
 
 - `/opt/voice-type/venv`：完整 Python 运行环境（faster-whisper、modelscope 等，离线可用）
+- `/opt/voice-type/bin`：**内置 wl-copy / wl-paste**，不需要另外安装 wl-clipboard
 - `/usr/bin/voice-type`：命令行入口
 - 应用菜单入口「语音输入」、图标
 - `/usr/lib/udev/rules.d/60-voice-type-uinput.rules`：允许 `input` 组写 `/dev/uinput`
@@ -157,7 +160,7 @@ voice-type download-model --model small --source huggingface
 1. 在任意应用（编辑器、浏览器、聊天窗口、终端……）里把光标放到要输入的位置
 2. **按住键盘右侧的 Alt 键（AltGr 位置）**，看到「正在录音」通知后开始说话
 3. 说完**松开右 Alt**
-4. 窗口自动隐藏，稍等片刻，文字出现在光标处
+4. 窗口自动隐藏，文字**边识别边出现**在光标处（按段落流式输入），全部完成后通知「已输入」
 
 录音期间控制窗口保持可见并显示「正在录音…」，松开后才隐藏。
 
@@ -339,10 +342,10 @@ $XDG_RUNTIME_DIR/voice-type.sock
   → 裸 PCM 封装为 WAV
   → 本地：faster-whisper 读取 WAV → 转 float32 → 识别
     在线：httpx multipart 上传 WAV → 解析 JSON text
-  → 中文标点规范化
-  → wl-copy 写入剪贴板
-  → uinput 虚拟键盘模拟 Ctrl+V（或 Ctrl+Shift+V；ydotool 备用）
-  → 约 1.2 秒后恢复原剪贴板
+  → 本地识别逐段产出（segment 生成器）
+    每段：中文标点规范化 → wl-copy 写剪贴板 → uinput 模拟 Ctrl+V 立即输入
+    窗口「最近识别」同步滚动显示
+  → 全部完成后约 1.2 秒恢复原剪贴板（只恢复一次）
   → 删除临时 WAV
   → 状态回到 IDLE，通知「已输入」
 ```
@@ -479,6 +482,17 @@ Ubuntu 24.04 仓库的 `ydotool 0.1.8` **只打包了客户端，没有 ydotoold
 
 二者都要求用户属于 `input` 组。向导第 1 步可一键修复（pkexec 提权），修改组后必须重新登录。
 
+### 流式输出的实现
+
+faster-whisper 的 `model.transcribe()` 返回的是**段（segment）生成器**——解码完一段就产出一段，而不是等整段音频结束。利用这一点：
+
+1. 识别开始前捕获一次原剪贴板内容
+2. 每产出一段：规范化标点 → `wl-copy` 写剪贴板 → uinput 模拟粘贴，文字立即出现在光标处；窗口「最近识别」同步刷新
+3. 全部段落完成后，延迟约 1.2 秒统一恢复原剪贴板（只恢复一次，避免逐段恢复互相覆盖）
+4. 某段注入失败时停止后续自动输入，把已识别的完整文字放进剪贴板并通知手动粘贴
+
+注意：流式粒度是**段落级**（一句话通常 1–2 段），不是逐字级；faster-whisper 不支持 token 级流式。在线 API 模式仍是一次性返回。
+
 ### 模型来源与缓存
 
 - HF 两个源（官方/镜像）共用 `huggingface_hub.snapshot_download`，通过 `HF_ENDPOINT` 切换；禁用 Xet 传输以兼容镜像
@@ -610,6 +624,7 @@ voice-type doctor
 - 文字注入依赖剪贴板；极少数禁用粘贴的应用无法输入
 - 录音和粘贴之间没有专门的焦点锁定；转录期间不要切换窗口
 - 没有基于静音的自动停止（必须松开右 Alt 或再按快捷键）
+- 流式输出为段落级（非逐字）；在线 API 模式不支持流式
 - 本地模型在 CPU 上运行，速度取决于 CPU；`large-v3` 明显较慢
 - **远程桌面（gnome-remote-desktop/RDP）会话中不可用**：该会话的合成器不读取 evdev 设备，右 Alt 监听与按键注入都无法工作；需本地登录的会话
 - deb 包目前仅 amd64；仅在 Ubuntu 24.04 + GNOME Wayland 上完整验证过
@@ -683,8 +698,9 @@ bash build-deb.sh --pip-index https://pypi.tuna.tsinghua.edu.cn/simple   # 国�
 - 套接字所有权（重复实例不删主实例套接字）
 - 模型来源映射、端点切换、HF/魔搭双缓存布局检测、非法模型/来源拒绝
 - uinput 快捷键映射、事件结构、非法快捷键拒绝
+- 流式注入：逐段注入、剪贴板只捕获/恢复一次、结果逐步刷新
 
-当前共 31 个单元测试。
+当前共 32 个单元测试。
 
 ---
 
