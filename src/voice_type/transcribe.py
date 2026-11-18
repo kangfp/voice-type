@@ -129,29 +129,62 @@ def _read_wav_float32(path: str) -> Any:
 _STREAM_CHUNK_SECONDS = 8.0
 
 
+def _quiet_cut(audio: Any, target: int, window: int = 16000) -> int:
+    """在 target 前后 1 秒内找能量最低的 50ms 帧作为切点，尽量不切断字。"""
+    import numpy as np
+
+    lo = max(0, target - window)
+    hi = min(len(audio), target + window)
+    step = 800  # 50ms @16kHz
+    best, best_energy = target, None
+    for pos in range(lo, hi, step):
+        frame = audio[pos : pos + step]
+        if len(frame) == 0:
+            continue
+        energy = float(np.mean(frame * frame))
+        if best_energy is None or energy < best_energy:
+            best_energy, best = energy, pos
+    return best
+
+
 def _speech_chunks(audio: Any, chunk_samples: int) -> list[tuple[int, int]]:
     """用 Silero VAD 找语音段，按静音边界合并成不超过 chunk_samples 的块。
 
     Whisper 默认把 2 秒内的停顿合并，长音频往往整段只有一个 segment，
-    无法流式输出。这里用更灵敏的静音阈值（400ms）在语句间隙处切块。
+    无法流式输出。这里用更灵敏的静音阈值（250ms）在语句间隙处切块；
+    自然语速下停顿可能更短，超长的单一语音区再按能量最低点强制拆分。
     """
     from faster_whisper.vad import VadOptions, get_speech_timestamps
 
     timestamps = get_speech_timestamps(
         audio,
-        VadOptions(min_silence_duration_ms=400, speech_pad_ms=200),
+        VadOptions(min_silence_duration_ms=250, speech_pad_ms=200),
     )
     if not timestamps:
         return []
-    chunks: list[tuple[int, int]] = []
+    merged: list[tuple[int, int]] = []
     start, end = timestamps[0]["start"], timestamps[0]["end"]
     for ts in timestamps[1:]:
         if ts["end"] - start <= chunk_samples:
             end = ts["end"]
         else:
-            chunks.append((start, end))
+            merged.append((start, end))
             start, end = ts["start"], ts["end"]
-    chunks.append((start, end))
+    merged.append((start, end))
+    # 强制拆分超长块（连续说话没有明显停顿时 VAD 只给一个大区）
+    chunks: list[tuple[int, int]] = []
+    for start, end in merged:
+        while end - start > chunk_samples:
+            cut = _quiet_cut(audio, start + chunk_samples)
+            cut = max(start + chunk_samples // 2, cut)
+            # 残余不足 1 秒就不拆了，并入本块——碎块会诱发 Whisper 幻听
+            if end - cut < 16000:
+                break
+            chunks.append((start, cut))
+            start = cut
+        # 跳过 0.3 秒以下的碎块（VAD 噪声点），同样为避免幻听
+        if end - start >= 4800:
+            chunks.append((start, end))
     return chunks
 
 
