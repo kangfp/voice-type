@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import threading
+import time
 from typing import Any, Callable
 
 from . import transcribe
@@ -25,6 +26,20 @@ TRANSCRIBING = "transcribing"
 StateCallback = Callable[[str], None]
 TextCallback = Callable[[str], None]
 StatusCallback = Callable[[str], None]
+
+
+def _stream_log(message: str) -> None:
+    """把流式识别/注入的时间点写入 ~/.local/state/voice-type/stream.log，
+    便于排查"文字是否逐段上屏"这类问题。"""
+    try:
+        from .config import state_dir
+
+        path = state_dir() / "stream.log"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(f"{time.strftime('%H:%M:%S')} {message}\n")
+    except OSError:
+        pass
 
 
 def hotkey_label(binding: str) -> str:
@@ -179,6 +194,7 @@ class Controller:
             def handle_piece(piece: str) -> None:
                 nonlocal inject_failed
                 streamed.append(piece)
+                _stream_log(f"segment {len(streamed)}: {len(piece)} chars")
                 partial = "".join(streamed).strip()
                 self.last_text = partial
                 if self.on_result:
@@ -187,17 +203,21 @@ class Controller:
                     return
                 try:
                     inject_text(piece, paste_shortcut=paste_shortcut, restore_clipboard=False)
+                    _stream_log(f"  injected {len(streamed)}")
                 except InjectError as exc:
                     inject_failed = True
+                    _stream_log(f"  inject failed: {exc}")
                     notify(
                         "自动输入失败，文字已复制",
                         "请手动按 Ctrl+V 粘贴。详情：" + str(exc),
                         urgency="critical",
                     )
 
+            _stream_log(f"begin ({'online' if cfg.get('backend') == 'online' else 'local'})")
             text = transcribe.transcribe(
                 path, cfg, status=self.on_status, on_segment=handle_piece
             )
+            _stream_log(f"finish: {len(streamed)} segments, {len(text)} chars")
             if text.strip():
                 self.last_text = text
                 if self.on_result:

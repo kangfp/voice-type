@@ -11,7 +11,7 @@
 
 程序不会开机自启动、没有系统托盘；需要时从应用菜单打开，关闭窗口即退出。
 
-> 当前版本：**v0.3.0** · [下载 deb 安装包](https://github.com/kangfp/voice-type/releases/latest)
+> 当前版本：**v0.3.1** · [下载 deb 安装包](https://github.com/kangfp/voice-type/releases/latest)
 
 ---
 
@@ -82,10 +82,10 @@
 
 ### 方式一：deb 安装包（推荐）
 
-从 [Releases 页面](https://github.com/kangfp/voice-type/releases/latest) 下载 `voice-type_0.3.0_amd64.deb`（约 99MB），然后**一条命令**安装（apt 会自动解决系统依赖）：
+从 [Releases 页面](https://github.com/kangfp/voice-type/releases/latest) 下载 `voice-type_0.3.1_amd64.deb`（约 99MB），然后**一条命令**安装（apt 会自动解决系统依赖）：
 
 ```bash
-sudo apt install ./voice-type_0.3.0_amd64.deb
+sudo apt install ./voice-type_0.3.1_amd64.deb
 ```
 
 > 也可以用 `sudo dpkg -i`，但缺依赖时需要再跑 `sudo apt-get install -f -y`；推荐直接用上面的 apt 命令。
