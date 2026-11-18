@@ -52,6 +52,9 @@ class ChineseTextTests(unittest.TestCase):
         )
         self.assertEqual(normalize_chinese("这是 一个 测试"), "这是一个测试")
 
+    def test_trailing_comma_at_segment_end(self):
+        self.assertEqual(normalize_chinese("另外,"), "另外，")
+
     def test_keeps_decimal_point(self):
         self.assertEqual(normalize_chinese("梁高3.5米"), "梁高3.5米")
 

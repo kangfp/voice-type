@@ -41,7 +41,8 @@ def normalize_chinese(text: str) -> str:
     """Whisper 中文常输出半角标点，转成全角并去掉汉字间多余空格。"""
     if not text:
         return text
-    text = re.sub(f"(?<=[{_CJK}]),(?=[{_CJK}])", "，", text)
+    # 逗号后可以是汉字或段尾（流式分段时逗号可能落在片段末尾）
+    text = re.sub(f"(?<=[{_CJK}]),(?=[{_CJK}]|$)", "，", text)
     text = re.sub(f"(?<=[{_CJK}])\\.(?=$|[{_CJK}])", "。", text)
     text = re.sub(f"(?<=[{_CJK}])\\?(?=$|[{_CJK}])", "？", text)
     text = re.sub(f"(?<=[{_CJK}])!(?=$|[{_CJK}])", "！", text)
@@ -124,6 +125,36 @@ def _read_wav_float32(path: str) -> Any:
     return np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
 
 
+# 流式切块上限：超过此时长的语音按静音边界拆成多块逐块识别
+_STREAM_CHUNK_SECONDS = 8.0
+
+
+def _speech_chunks(audio: Any, chunk_samples: int) -> list[tuple[int, int]]:
+    """用 Silero VAD 找语音段，按静音边界合并成不超过 chunk_samples 的块。
+
+    Whisper 默认把 2 秒内的停顿合并，长音频往往整段只有一个 segment，
+    无法流式输出。这里用更灵敏的静音阈值（400ms）在语句间隙处切块。
+    """
+    from faster_whisper.vad import VadOptions, get_speech_timestamps
+
+    timestamps = get_speech_timestamps(
+        audio,
+        VadOptions(min_silence_duration_ms=400, speech_pad_ms=200),
+    )
+    if not timestamps:
+        return []
+    chunks: list[tuple[int, int]] = []
+    start, end = timestamps[0]["start"], timestamps[0]["end"]
+    for ts in timestamps[1:]:
+        if ts["end"] - start <= chunk_samples:
+            end = ts["end"]
+        else:
+            chunks.append((start, end))
+            start, end = ts["start"], ts["end"]
+    chunks.append((start, end))
+    return chunks
+
+
 def transcribe_local(
     path: str,
     cfg: dict[str, Any],
@@ -141,29 +172,40 @@ def transcribe_local(
     if status:
         status("正在识别…")
     audio = _read_wav_float32(path)
+    prompt = _local_prompt(language, str(cfg.get("initial_prompt") or ""))
+    beam = int(cfg.get("beam_size") or 5)
     try:
-        segments, info = model.transcribe(
-            audio,
-            language=lang,
-            beam_size=int(cfg.get("beam_size") or 5),
-            vad_filter=bool(cfg.get("vad_filter")),
-            condition_on_previous_text=False,
-            initial_prompt=_local_prompt(language, str(cfg.get("initial_prompt") or "")),
-        )
-        detected = getattr(info, "language", None) if info is not None else None
-        zh_mode = language == "zh" or detected == "zh"
-        chunks: list[str] = []
-        # 逐段流式输出：每解码完一段就回调一次，而不是等全部结束
-        for seg in segments:
-            piece = seg.text
-            if zh_mode:
-                piece = normalize_chinese(piece).strip()
-            if not piece.strip():
-                continue
-            chunks.append(piece)
-            if on_segment:
-                on_segment(piece)
-        text = "".join(chunks).strip()
+        ranges = _speech_chunks(audio, int(_STREAM_CHUNK_SECONDS * 16000))
+        if not ranges:
+            return ""
+        pieces: list[str] = []
+        zh_mode = language == "zh"
+        for idx, (start, end) in enumerate(ranges, 1):
+            if status and len(ranges) > 1:
+                status(f"正在识别（第 {idx}/{len(ranges)} 段）…")
+            segments, info = model.transcribe(
+                audio[start:end],
+                language=lang,
+                beam_size=beam,
+                # 块已按 VAD 裁剪掉静音，无需再过滤
+                vad_filter=False,
+                condition_on_previous_text=False,
+                initial_prompt=prompt,
+            )
+            detected = getattr(info, "language", None) if info is not None else None
+            if detected == "zh":
+                zh_mode = True
+            # 逐段流式输出：每解码完一段就回调一次，而不是等全部结束
+            for seg in segments:
+                piece = seg.text
+                if zh_mode:
+                    piece = normalize_chinese(piece).strip()
+                if not piece.strip():
+                    continue
+                pieces.append(piece)
+                if on_segment:
+                    on_segment(piece)
+        text = "".join(pieces).strip()
     except Exception as exc:  # noqa: BLE001
         raise TranscribeError(f"本地识别失败：{exc}") from exc
     return text
